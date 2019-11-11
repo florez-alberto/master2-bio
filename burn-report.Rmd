@@ -1,0 +1,510 @@
+---
+title: "Biostatistics Project"
+author: "by Alberto Florez Prada"
+date: ""
+output: 
+  html_document:
+    theme: sandstone
+    highlight: tango
+
+---
+ 
+
+```{r setup, echo=FALSE, cache=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+library(GEOquery)
+library(Biobase)
+library(ggplot2)
+library(ggpubr)
+library(gridExtra)
+library(Hmisc)
+library(matrixStats)
+library(wesanderson)
+library(vsn)
+library(pheatmap)
+library(grid)
+library(gtable)
+```
+  
+##Study title: Inflammation and the Host Response to Injury  
+
+
+####Retriving the Data from Bioconductor  
+```{r, cache=TRUE, message=FALSE, warning=FALSE}
+data <- getGEO('GSE37069', GSEMatrix=TRUE)
+eset <- data[[1]]
+
+```
+  
+
+
+###Background of the Study  
+  
+Inflammation and the Host Response to Injury is a research consortium supported by the National Institute of General Medical Sciences (NIGMS), a component of the National Institutes of Health. This collaborative program aims to uncover the biological reasons why patients can have dramatically different outcomes after suffering a traumatic injury.^1^  
+  
+Accession	numbers: PRJNA158087^2^; GEO: GSE37069^3^  
+```{r, echo=TRUE}
+
+m<- pData(phenoData(eset))
+test<- exprs(eset)
+```
+  
+It consists of `r dim(m)[1]` blood sample tests, from 244 severe burned patients over time as well as 37 healthy subjects (controls). Study subjects were treated under standard operating procedures to minimize treatment variations. Patients had burns covering >20% of the total body surface area and were admitted within 96 hours of injury. Genome-wide expression analyses were conducted using the Affymetrix U133 plus 2.0 GeneChip^TM^ ^(3,4)^.
+<br>
+This chip contains the measurements of `r dim(test)[1]` human genes as described elsewere ^5^. The value of each result is the Robust Multi-array Average (RMA) signal per Affymetrix Power Tools version 1.8.6 RMA model ^5^ which consists in background-adjusted, quantile-normalized, and log~2~-transform of the Perfect Match probes signal, meaning the signal given by the 16–20 pairs of oligonucleotides referred to as probe sets that match perfectly the RNA of the sample^6^.
+<br>
+<br>
+
+  
+###Data Arrangement 
+There are 2 data frames that contain the data from this study, *pheno_data* and *expr_data*, both joined together by the affimetrix chip measurement identifier "geo_accession". 
+<br>
+
+Pheno_data contains the clinical data of each blow sample measurement and expr_data contains the intensity results of each measurement (Fig. 1)
+<br><br>
+```{r, warning=FALSE, echo=FALSE}
+#pheno data arrangement
+pheno_data<- m[,c("geo_accession","source_name_ch1",
+                  "age:ch1","hours_since_injury:ch1" ,"Sex:ch1" )]
+colnames(pheno_data)<- c("geo_accession" , "source_name", "age",
+                         "hours_since_injury", "sex")
+pheno_data$ID<- "Case"
+pheno_data$ID[1:37]<-"Control"
+
+pheno_data$source_name<- gsub("Subject ", "", pheno_data$source_name)
+pheno_data$source_name<- gsub(",.+", "", pheno_data$source_name)
+pheno_data$source_name[1:37]<- paste(pheno_data$source_name[1:37], 1:37, sep="")
+
+pheno_data$age<- as.integer(pheno_data$age)
+pheno_data$hours_since_injury<- as.numeric(pheno_data$hours_since_injury)
+
+```
+
+
+```{r, echo=FALSE, fig.width=10,fig.cap="<b>Figure 1. General structure of the data frames for this study.</b> (A) Pheno_data. The first 5 columns were selected as the most relevant from the original 44 columns, plus a dummy variable - ID, that was introduced to identify cases and controls more easily later on in the analysis. (B) Expr_data. Each row contains the RMA value of each 44692 genes of the microarray chip, and in each column the geo_accession number linked to the clinical data in the pheno_data dataframe." }
+padding <- unit(5,"mm")
+t1 <- tableGrob(tail(pheno_data))
+  #grid.table(tail(pheno_data), rows=NULL)
+ #tableGrob(tail(pheno_data))
+title1 <- textGrob("(A)",gp=gpar(fontsize=30))
+expr_data<-test
+t2<- tableGrob(head(expr_data[,1:5]))
+  #grid.table(head(expr_data[,1:5]))
+title2<- textGrob("(B)",gp=gpar(fontsize=30))
+
+table1 <- gtable_add_rows(
+     t1, 
+     heights = grobHeight(title1) + padding,
+     pos = 0)
+table1 <- gtable_add_grob(
+    table1, 
+    title1, 
+    1, 1, 1, ncol(table1))
+
+table2 <- gtable_add_rows(
+     t2, 
+     heights = grobHeight(title2) + padding,
+     pos = 0)
+table2 <- gtable_add_grob(
+    table2, 
+    title2, 
+    1, 1, 1, ncol(table2))
+
+
+grid.arrange(table1,
+             table2, as.table=TRUE,
+             nrow=2)
+
+
+```
+<br>
+The present report makes an exploratory data analysis of the two data frames of Fig. 1. First, an analysis variable per variable, then by pairs and finally combining the two data frames to obtain preliminary results that may need further validation. The RMD R data code is available in github (https://github.com/florez-alberto/master2-bio)and the final report was also published in RPubs (http://rpubs.com/florez_alberto/m2-biostat).
+<br> 
+
+###Descriptive analytics for Pheno_data
+```{r, echo=FALSE}
+s1<- pheno_data[!duplicated(pheno_data$source_name),]#removing the duplicated source names
+s1$age<- as.numeric(s1$age)
+s1$hours_since_injury<- as.numeric(s1$hours_since_injury)
+```
+<br>
+
+####Single Variable Statistics
+The variable `r colnames(pheno_data)[3]` has been corrected for each individual patient because there may be several observations per patient. It is quantitative continuous variable with a mean `r round(mean(s1$age), 2)`, a standard deviation of `r round(sd(s1$age), 2)`. The bins were chosen following Sturge's rule ^7^. The histogram plot is skewed to the left, according to the literature that says that younger people tend to have more burn accidents^8^. 
+
+```{r, echo=FALSE,warning=FALSE, fig.width=8, fig.cap="<b>Figure 2: Summary statistics of the distribution of the age of each patient.</b> (A) Quartile distribution. (B) Histogram distribution. The red vertical line represents the mean and the blue line represents the median."}
+
+t1 <- tableGrob(t(summary(s1$age)))
+
+title1 <- textGrob("(A)",gp=gpar(fontsize=15))
+
+table1 <- gtable_add_rows(
+     t1, 
+     heights = grobHeight(title1) + padding,
+     pos = 0)
+table1 <- gtable_add_grob(
+    table1, 
+    title1, 
+    1, 1, 1, ncol(table1))
+
+
+f1<-ggplot(s1, aes(age))+ geom_histogram(bins=(1+(3.322*log(nrow(s1)))))+
+  ylab("Number of patients")+xlab("Age")+ggtitle("(B)")+geom_vline(xintercept=round(mean(s1$age), 2), color = "red") +
+geom_vline(xintercept=round(median(s1$age), 2), color = "blue")
+
+grid.arrange(table1,
+             f1,
+             nrow=2)
+
+```
+<br>
+The variable `r colnames(pheno_data)[4]` is quantitative continuous, in Fig. 3 it is appreciated that the data is skewed to the left, with a predominancy of the observations close to the time of injury. The outliers in this case make the stantard deviation to be very high and shift the mean to the right, whereas the majority of observations are close to the injury time. The controls were not taken into account because they did not have a time after injury.
+<br>
+```{r, echo=FALSE,warning=FALSE,fig.height=3, fig.width=6, fig.cap="<b>Figure 3: Density Plot of the distribution of the hours since injury.</b> The red vertical line represents the mean and the blue line represents the median."}
+
+
+ggplot(pheno_data, aes(x=hours_since_injury))+ geom_density(aes(y = ..count..))+
+     geom_vline(xintercept=mean(pheno_data[which(pheno_data$ID=="Case"),
+        "hours_since_injury"]), color="red", size=1)+
+    geom_vline(xintercept=median(pheno_data[which(pheno_data$ID=="Case"),
+        "hours_since_injury"]), color="blue", size=1) +
+annotation_custom(tableGrob(data.frame(`Line`=c( "Red", "Blue"), Statistic=c("mean", "median"), Value=c(mean(pheno_data[which(pheno_data$ID=="Case"),"hours_since_injury"]),
+median(pheno_data[which(pheno_data$ID=="Case"),"hours_since_injury"]))), rows=NULL), xmin=12000, xmax=12200, ymin=0.8, ymax=0.9)+
+  ylab("Count: density per number of points")
+
+
+
+```
+<br>
+The variable `r colnames(pheno_data)[2]` is qualitative and it identifies each patient. Some patients were taken repeated blood samples at different hours since injury. When tabled and plotted it is possible to asses how many invividual times each patient had their blood sampled, which in turn is a quantitative discrete variable.
+<br>
+```{r, echo=FALSE, warning=FALSE, fig.cap="<b>Figure 4: Number of blood samples taken per patient.</b> The numbers over the bars correspond to the absolute count."}
+m2<- table(pheno_data$source_name)
+m2<- as.data.frame(m2)
+ggplot(m2, aes(as.factor(Freq)))+geom_bar()+
+    geom_text(aes(label=..count..),stat="count", position = position_dodge(0.9),vjust = -0.2)+ xlab("Number of samples")+ylab("Number of patients")
+
+```
+<br>
+As it can be appreciated in Fig. 4, most of the patients only had one blood sample taken and analized on the microarray chip U133.
+<br>
+The variables `r colnames(pheno_data)[5]` and `r colnames(pheno_data)[6]` both are dichotomous qualitative nominal variables. To review these variables, only the unique source_names must be taken in account. For this reason a subset of the pheno_data data frame was taken.
+<br>
+```{r,warning=FALSE, echo=FALSE,fig.height=3, fig.cap="<b>Figure 4: Summary statistics of the sex and ID.</b> (A) Sex. Absolute and relative values. (B) ID. Absolute and relative values."}
+
+tb1<-cbind(as.data.frame(table(s1$sex)),as.data.frame(round(prop.table(table(s1$sex)),2))[,2])
+
+colnames(tb1)<- c("Variable", "Frequency", "Proportion")
+
+tb2<-cbind(as.data.frame(table(s1$ID)),as.data.frame(round(prop.table(table(s1$ID)),2))[,2])
+
+colnames(tb2)<- c("Variable", "Frequency", "Proportion")
+
+g1 <- tableGrob(tb1, rows = NULL)
+g1 <- gtable_add_grob(g1,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 2, b = nrow(g1), l = 1, r = ncol(g1))
+g1 <- gtable_add_grob(g1,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 1, l = 1, r = ncol(g1))
+
+
+title1 <- textGrob("(A)",gp=gpar(fontsize=15))
+
+table1 <- gtable_add_rows(
+     g1, 
+     heights = grobHeight(title1) + padding,
+     pos = 0)
+table1 <- gtable_add_grob(
+    table1, 
+    title1, 
+    1, 1, 1, ncol(table1))
+
+
+
+g2 <- tableGrob(tb2, rows = NULL)
+g2 <- gtable_add_grob(g2,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 2, b = nrow(g2), l = 1, r = ncol(g2))
+g2 <- gtable_add_grob(g2,
+        grobs = rectGrob(gp = gpar(fill = NA, lwd = 2)),
+        t = 1, l = 1, r = ncol(g2))
+
+title2 <- textGrob("(B)",gp=gpar(fontsize=15))
+
+table2 <- gtable_add_rows(
+     g2, 
+     heights = grobHeight(title2) + padding,
+     pos = 0)
+table2 <- gtable_add_grob(
+    table2, 
+    title2, 
+    1, 1, 1, ncol(table1))
+grid.arrange(table1,
+             table2,
+             nrow=2)
+
+```
+<br>
+There is a predominancy of male subjects in the sample. The ratio male/female for the cases is `r round(length(which(s1$sex=="M"&s1$ID=="Case"))/length(which(s1$sex=="F"&s1$ID=="Case")),2)`. This ratio is slightly higher than the reported in the literature, which is expected to be 1.56 ^9^.  
+Interestingly, the raw ratio male/female withouth removing duplicated observations is `r round(length(which(pheno_data$sex=="M"&pheno_data$ID=="Case"))/length(which(pheno_data$sex=="F"&pheno_data$ID=="Case")),2)`, which is very close to the calculated ratio male/female for unique patients.
+<br>
+The dummy variable `r colnames(pheno_data)[6]` just identifies if an observation corresponds to a control or to a case. 
+As stated before, each of the `r dim(pheno_data)[1]` rows corresponds to each individual blood sample. Also taking the subset of the unique source names it is possible to describe the number of patients in each group.  
+<br><br>
+
+###Descriptive Analytics of certain pairs of variables  
+
+Using the combn function^8^, all the possible pairs of the previously analysed variables are `r  dim(combn( colnames(pheno_data)[2:6],2))[2]`. 
+```{r,echo=FALSE}
+comb<-combn( colnames(pheno_data)[2:6],2)
+```
+The variables are mostly unique per patient (source name) which means that they need to be subsetted. For the case of combining hours_since_injury with these variables, no valuable information can me extracted, reason why only the some of the pairs were analyzed.
+<br>
+To achieve a boxplot per sample per patient, a new data frame is created by merging the table count of each source name and its respective age. The results in Fig. 5 may be biased because of the uneven distribution of the absolute number of samples per patient  (Fig. 4). However, the trend shows that apparently older patients had more samples taken.
+```{r ,warning=FALSE, echo=FALSE, fig.width=8, fig.cap="<b>Figure 5: Boxplot of samples per patient and age.</b> Only the significant pairs have been plotted with a line."}
+m3<- merge(m2, s1[,c("source_name","age")], by.x="Var1", by.y="source_name")
+
+
+ggplot(m3, aes(x=as.factor(Freq), y=age))+geom_boxplot()+xlab("Absolute number of samples per patient")+ stat_compare_means(comparisons=list(c(1,2),c(1,3),c(1,5)),symnum.args= list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, 1), symbols = c("****", "***", "**", "*", "ns"))) + annotation_custom(tableGrob(data.frame(`sig level`=c( "0.0001", "0.001", "0.01", "0.05"), symbol=c("****", "***", "**", "*")), rows=NULL), xmin=4.9, xmax=6.8, ymin=80, ymax=90)+stat_compare_means(label.y=120)
+
+
+```
+<br>
+Regarding the pair `r comb[,3]` a facetted barplot was generated. The ratio male/female is not preserved for each of the absolute number per patients and this could introduce a bias in the generalization of the results for women.  
+<br>
+```{r,warning=FALSE, echo=FALSE, fig.width=8, fig.cap="<b>Figure 6: Barplot of samples per sex.</b> The values over the columns represent the absolut count for each group."}
+m3<- merge(m2, s1[,c("source_name","sex")], by.x="Var1", by.y="source_name")
+m3$Freq<- as.factor(m3$Freq)
+ggplot(m3, aes(Freq,fill=sex))+geom_bar(position="dodge")+ xlab("Number of samples")+ylab("Number of patients")+
+geom_text(aes(label=..count..),stat="count", position = position_dodge(0.9),vjust = -0.2)
+
+```
+<br>
+The sixth pair of variables are `r colnames(pheno_data)[3]` and `r colnames(pheno_data)[5]` and `r colnames(pheno_data)[6]` are, quantitative, and the last two qualitative. Again, a predominancy of male cases can be seen in Fig 7-C, similarly to Fig. 6.
+In Fig. 7-A it can be appreciated that there is no difference between both groups, whereas there is a difference between the ages of the cases and controls (Fig. 7-B), being the controls relatively older.
+
+```{r,warning=FALSE, echo=FALSE,fig.height=4, fig.width=6, fig.cap="<b>Figure 7: Summary statistics of different pairs of variables.</b> (A) Table of the sex and ID. A predominancy of male cases can be appreciated. (B) Age and sex. (C) Age and ID. A wilcoxon test for the difference of the means was performed."}
+m3<- merge(m2, s1[,c("source_name","sex", "ID")], by.x="Var1", by.y="source_name")
+m3$Freq<- as.factor(m3$Freq)
+t1 <- tableGrob(table(m3$sex,m3$ID))
+
+title1 <- textGrob("(C)",gp=gpar(fontsize=15))
+
+table1 <- gtable_add_rows(
+     t1, 
+     heights = grobHeight(title1) + padding,
+     pos = 0)
+table1 <- gtable_add_grob(
+    table1, 
+    title1, 
+    1, 1, 1, ncol(table1))
+
+
+m3<- merge(m2, s1[,c("source_name","age", "sex")], by.x="Var1", by.y="source_name")
+m3$Freq<- as.factor(m3$Freq)
+
+f1<- ggplot(m3, aes(sex,age))+geom_boxplot()+stat_compare_means(label.x = 1.4, label.y = 75)+ggtitle("(A)")
+
+m3<- merge(m2, s1[,c("source_name","age", "ID")], by.x="Var1", by.y="source_name")
+m3$Freq<- as.factor(m3$Freq)
+
+f2<-ggplot(m3, aes(ID,age))+geom_boxplot()+stat_compare_means(label.x = 1.4, label.y = 75)+ggtitle("(B)")
+
+
+
+
+
+grid.arrange(f1,
+             f2,table1, 
+             nrow=2, ncol=2)
+
+
+
+```
+<br>
+
+###Descriptive Analytics for expr_data 
+
+<br>
+
+####Central tendency and dispersion analytics per gene
+First, the row-wise calculation of the medians, means and standard deviations per gene was generated. The median statistic was also chosen because it is ourlier independent. In Fig. 9 all distributions  skewed to the left, this means that there are genes that are poorly expressed and that the gene expression between genes have a relatively low variance.
+
+```{r,warning=FALSE, echo=FALSE,fig.height=5, fig.width=5, fig.cap="<b>Figure 9: Central tendency and dispersion analytics per gene.</b> The histogram bars correspond to the bins of the density of each of the 44692 genes analyzed in the chip."}
+
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("vsn")
+
+expr_medians<- rowMedians(expr_data)
+expr_means<- rowMeans(expr_data)
+expr_sds<- rowSds(expr_data)
+
+par(mfrow=c(3,1))
+hist_res <- hist(expr_medians, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the median intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(A) Median RMA intensities")
+
+hist2_res <- hist(expr_means, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the mean intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(B) Mean RMA intensities")
+
+hist3_res <- hist(expr_sds, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the stantard deviation intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(C) Standard deviation of RMA intensities")
+
+
+
+```
+<br>
+To explore genes that have a low variance and are poorly expressed, that can potentially be trimmed for the dataset, SDs were plotted against mean, using the density in a heat-plot style to show the concentration of the samples. In Fig. 10 there is a cluster of genes that may be close to the background noise expression, that can potentially be interpretted as significantly different in later analysis but in reality it may be just a confusion with the background.
+
+```{r, echo=FALSE, results = 'hide', message=FALSE, include = FALSE}
+msd<-meanSdPlot(expr_data, ranks=FALSE)
+```
+
+
+```{r,warning=FALSE, message=FALSE, echo=FALSE,fig.height=5, fig.width=5, fig.cap="<b>Figure 10:SD vs Mean RMA intensities per gene.</b> The red line is a regression line of the samples and the colors represent the density of the observations in each x-y coordinate."}
+
+
+msd$gg  + scale_fill_gradient2(low="white",mid = "yellow", high = "darkred")
+```
+<br>
+
+####Central tendency and dispersion analytics per patient 
+Analyzing each patient expression across all the genes, it can be appreciated in Fig. 11 that there is a higher median expression with a mean and variance skewed to the right. This means that there is a large variation of the expression of genes across patients.
+
+```{r,warning=FALSE, echo=FALSE,fig.height=5, fig.width=5, fig.cap="<b>Figure 11: Central tendency and dispersion analytics per Chip Measurement.</b> The histogram bars correspond to the bins of the density of each of the 590 chip measurements."}
+
+
+t.expr_medians<- rowMedians(t(expr_data))
+t.expr_means<- rowMeans(t(expr_data))
+t.expr_sds<- rowSds(t(expr_data))
+
+par(mfrow=c(3,1))
+hist_res <- hist(t.expr_medians, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the median intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(A) Median RMA intensities")
+
+hist2_res <- hist(t.expr_means, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the mean intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(B) Mean RMA intensities")
+
+hist3_res <- hist(t.expr_sds, 100, col = "cornsilk1", freq = FALSE, 
+            main ="", #"Histogram of the stantard deviation intensities per gene", 
+            border = "antiquewhite4",
+            xlab = "(C) SD RMA intensities")
+
+
+```
+<br>
+
+####Exploratory analysis between pheno_data and expr_data
+
+<br>
+
+####Principal Component Analysis
+The principal component analysis of each gene observation was carried out as previosly published ^10^, to assess how much each component contributes to the variability of the samples. The first 2 components roughly contribute to around 37% of the variability as it can be seen in Fig. 12, with two differentiated groups across the components.
+
+```{r,warning=FALSE, echo=FALSE,fig.height=6, fig.width=6, fig.cap="<b>Figure 12: Principal Component Analysis of the gene expression.</b> Every point in the plot represents one blood sample. The colour indicates the hours since injury and the shape indicates whether its case or control."}
+
+
+PCA <- prcomp(t(expr_data), scale = FALSE)
+
+percentVar <- round(100*PCA$sdev^2/sum(PCA$sdev^2),1)
+sd_ratio <- sqrt(percentVar[2] / percentVar[1])
+
+#colnames(pheno_data)
+dataGG <- data.frame(PC1 = PCA$x[,1], PC2 = PCA$x[,2],
+                    Group = 
+                     pheno_data$ID,
+                    hours_since_injury = 
+                     as.numeric(as.character(pheno_data$hours_since_injury)))
+
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+ggplot(dataGG, aes(PC1, PC2)) +
+      geom_point(aes(shape = Group, colour = hours_since_injury)) +
+  xlab(paste0("PC1, VarExp: ", percentVar[1], "%")) +
+  ylab(paste0("PC2, VarExp: ", percentVar[2], "%")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  coord_fixed(ratio = sd_ratio) +
+  scale_shape_manual(values = c(4,15)) + 
+  scale_color_gradientn(colours = pal)
+
+```
+<br>
+<br>
+
+####clustering Heatmap of the Manhattan distances
+The manhattan distance is defined as the sum of the absolute distance of their cartesian coordinates^12^, and can be used to asses the differences of the discrete (genetical) distributions per patient as an exploratory analysis. This analysis if followed by a heatmap cluster analysis that will validate the results of the PCA. Large distances that do not cluster together may correspond to outliers that can possibly be removed too. 
+Row annotations were used to follow the clustering for each observation. 
+
+```{r,warning=FALSE, echo=FALSE,fig.height=5, fig.width=8, fig.cap="<b>Figure 13: Clustering heatmap of the diferential gene expression.</b> Every point in the plot represents one blood sample. The colour indicates the hours since injury and the shape indicates whether its case or control."}
+#traspose the data, order  by case, hours after injury, 
+annotation_for_heatmap <- 
+  data.frame(Group = pheno_data$ID,
+              hours_since_injury =pheno_data$hours_since_injury,
+             Age=as.numeric(as.character(pheno_data$age)))
+
+
+dists <- as.matrix(dist(t(expr_data), method = "manhattan"))
+
+
+
+
+rownames(annotation_for_heatmap) <- pheno_data$geo_accession
+
+
+hmcol <- colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))(255)
+colnames(dists) <- NULL
+diag(dists) <- NA
+
+
+pheatmap(dists, col = (hmcol),
+         annotation_row = annotation_for_heatmap,
+         #annotation_colors = ann_colors,
+         legend = TRUE, 
+         treeheight_row = 0,
+         treeheight_col = 5,
+         show_rownames = F,
+         legend_breaks = c(min(dists, na.rm = TRUE), 
+                         max(dists, na.rm = TRUE)), 
+         legend_labels = (c("small distance", "large distance")),
+         order_by_max_functionality=TRUE,
+         fontsize = 7, angle_col=315)#,
+         #cluster_rows=F, cluster_cols=F)
+
+
+```
+<br>
+<br>
+
+### Conclusions
+Inflammation and the Host Response to Injury is a research consortium with the objective of uncover the biological reasons why patients have different outcomes after suffering traumatic injuries.<br>
+The following descriptive analysis follows the genetic expression Affymetrix U133 plus 2.0 GeneChip signal of 244 severe burned patients (>20% of the total body surface) admited within the first 96 hours of injury and 37 healthy controls, over the time for 44692 human genes. Thus, some of the cases have multiple observations across their evolution in time. The data frames obtained for this study are publicly available via the NCBI portal Bioproject.<br>
+The first data frame, pheno_data contains the clinical measurement variables and the second data frame, expr_data, contains the affimetrix chip measurement. Bot datasets are joined together by the identifier "geo_accession".<br>
+An analysis of the clinical variables, singles and by pairs showed a mean distribution of the age according to the literature that says that younger patients tend to have more burning injuries. There is a tendency that the hours since injury are closer to the time of the injury than further in time. and most of the patients only have one or two measurements, apparently younger patients. The sex distribution ratio is slightly higher than the reported literature. However, it does not follow an even distribution by the absolute number of samples taken per patient. Apparently, there is a significative difference between the age of the cases and controls and a clustering of male cases in this study.<br>
+In the analysis of the signal expression per gene across all patients, it appears that there is a subset of poorly expressed genes with high variation that may be accounted as significantly different but in reality it may be confusion with the background.<br>
+The differential expression between the hours since injury is the dominant source of variation. Also it can be seen that the expression between controls and the longest hour since injury sample start to match, possibly explaining the return of the genetic expression to a baseline after a period of time after the injury. <br>
+In the heatmap cluster analysis, this data is validated as it can be seen the clustering of the longest hours since injury with the controls. However this clustering is not completely defined confirming that the diferential expression is not completely perfect.
+<br>
+Finally, the results of the PCA and differential expression analysis may serve as a milestone to look for statisticals tests and regression models using the hours since injury and case/control variables across genetical expression data to find differentially expressed genes for a posterior analysis of differential expression of those target genes.
+<br>
+<br>
+####References
+1. https://med.stanford.edu/sgtc/research/inflammation.html
+2. https://www.ncbi.nlm.nih.gov/bioproject/PRJNA158087
+3. https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=gse37069
+4. https://www.thermofisher.com/order/catalog/product/900466
+5. https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL570
+6. Irizarry RA, Hobbs B, Collin F, Beazer‐Barclay YD, Antonellis KJ, Scherf U, Speed TP. Exploration, normalization, and summaries of high density oligonucleotide array probe level data. Biostatistics. 2003 Apr 1;4(2):249-
+7. Sturges, H.(1926) The choice of a class-interval.J. Amer. Statist. Assoc.,21, 65–66
+8. https://www.who.int/news-room/fact-sheets/detail/burns
+9. Smolle C, Cambiaso-Daniel J, Forbes AA, Wurzer P, Hundeshagen G, Branski LK, Huss F, Kamolz LP. Recent trends in burn epidemiology worldwide: A systematic review. Burns. 2017 Mar 1;43(2):249-57.
+10. https://www.rdocumentation.org/packages/utils/versions/3.4.1/topics/combn
+11. https://bioconductor.org/packages/devel/workflows/vignettes/maEndToEnd/inst/doc/MA-Workflow.html
