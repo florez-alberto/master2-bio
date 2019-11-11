@@ -496,7 +496,9 @@ In the heatmap cluster analysis, this data is validated as it can be seen the cl
 Finally, the results of the PCA and differential expression analysis may serve as a milestone to look for statisticals tests and regression models using the hours since injury and case/control variables across genetical expression data to find differentially expressed genes for a posterior analysis of differential expression of those target genes.
 <br>
 <br>
+
 ####References
+
 1. https://med.stanford.edu/sgtc/research/inflammation.html
 2. https://www.ncbi.nlm.nih.gov/bioproject/PRJNA158087
 3. https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=gse37069
