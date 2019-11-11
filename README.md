@@ -1,4 +1,4 @@
-# master2-bio
+# Master2-bio: Inflammation and the Host Response to Injury
 Repository for the UGA M2 Biostatistics and bioinformatics Course - 2019 <br>
 By: Alberto Florez Prada<br>
 ## Description
