@@ -1,13 +1,13 @@
 # master2-bio
-Repository for the UGA M2 Biostatistics and bioinformatics Course - 2019
-By: Alberto Florez Prada
-##Description
+Repository for the UGA M2 Biostatistics and bioinformatics Course - 2019 <br>
+By: Alberto Florez Prada<br>
+#Description
 Inflammation and the Host Response to Injury is a research consortium with the objective of uncover the biological reasons why patients have different outcomes after suffering traumatic injuries.
 The following descriptive analysis follows the genetic expression Affymetrix U133 plus 2.0 GeneChip signal of 244 severe burned patients (>20% of the total body surface) admited within the first 96 hours of injury and 37 healthy controls, over the time for 44692 human genes.
 The present report makes an exploratory data analysis of the two data frames of Fig. 1. First, an analysis variable per variable, then by pairs and finally combining the two data frames to obtain preliminary results that may need further validation.
+<br>
 
-
-##References
+#References
 1. https://med.stanford.edu/sgtc/research/inflammation.html
 2. https://www.ncbi.nlm.nih.gov/bioproject/PRJNA158087
 3. https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=gse37069
