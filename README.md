@@ -4,9 +4,10 @@ By: Alberto Florez Prada<br>
 ## Description
 Inflammation and the Host Response to Injury is a research consortium with the objective of uncover the biological reasons why patients have different outcomes after suffering traumatic injuries.
 The following descriptive analysis follows the genetic expression Affymetrix U133 plus 2.0 GeneChip signal of 244 severe burned patients (>20% of the total body surface) admited within the first 96 hours of injury and 37 healthy controls, over the time for 44692 human genes.
-The present report makes an exploratory data analysis of the two data frames of Fig. 1. First, an analysis variable per variable, then by pairs and finally combining the two data frames to obtain preliminary results that may need further validation.
+The present report makes an exploratory data analysis of the two data frames and then compares the differential genetic expression using a cubic spline regression model. It demonstrates the activation of high impact in genetic expression following a severe burn and that after some period of time it returns to a baseline.
 <br>
 Available also in Rpubs: http://rpubs.com/florez_alberto/m2-biostat <br>
+http://rpubs.com/florez_alberto/m2-biostat-second<br>
 ## References
 1. https://med.stanford.edu/sgtc/research/inflammation.html
 2. https://www.ncbi.nlm.nih.gov/bioproject/PRJNA158087
