@@ -1,0 +1,395 @@
+---
+title: "Second session: Biostatistics Project"
+author: "by Alberto Florez Prada"
+date: ""
+output: 
+  html_document:
+    theme: sandstone
+    highlight: tango
+
+---
+ 
+
+```{r setup, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(cache = TRUE)
+library(GEOquery)
+library(Biobase)
+library(ggplot2)
+library(ggpubr)
+library(gridExtra)
+library(Hmisc)
+library(matrixStats)
+library(wesanderson)
+library(vsn)
+library(grid)
+library(gtable)
+library(reshape)
+library(splines) 
+library(limma)
+
+```
+
+
+##Study title: Inflammation and the Host Response to Injury  
+###Summary of the previous report
+Inflammation and the Host Response to Injury is a research consortium with the objective of uncover the biological reasons why patients have different outcomes after suffering traumatic injuries.<br>
+The first part consisted of a descriptive analysis that followed the genetic expression Affymetrix U133 plus 2.0 GeneChip signal of 244 severe burned patients (>20% of the total body surface) admited within the first 96 hours of injury and 37 healthy controls, over the time for 44692 human genes. Thus, some of the cases have multiple observations across their evolution in time. The data frames obtained for this study are publicly available via the NCBI portal Bioproject.<br>
+The first data frame, pheno_data contains the clinical measurement variables and the second data frame, expr_data, contains the affimetrix chip measurement. Bot datasets are joined together by the identifier "geo_accession".<br>
+As a main conclusion from the first part, after performing PCA and differential gene expression analysis, is that the gene expression between controls and the longest hour since injury samples match, possibly explaining the return of the genetic expression to a baseline after a period of time after the injury.<br>
+<br>
+
+### Proposed objectives  
+
+1. Asses the differentially expressed genes over time.
+2. Identify the amount of time necessary for the return of the genetic expression to the baseline.
+3. Create a genetic map to identify the metabolic route of the genetic expression after a burn.
+
+<br><br>
+```{r, echo=FALSE, cache=TRUE, message=FALSE, warning=FALSE}
+#Retriving the Data from Bioconductor 
+data <- getGEO('GSE37069', GSEMatrix=TRUE)
+eset <- data[[1]]
+m<- pData(phenoData(eset))
+test<- exprs(eset)
+#pheno data arrangement
+pheno_data<- m[,c("geo_accession","source_name_ch1",
+                  "age:ch1","hours_since_injury:ch1" ,"Sex:ch1" )]
+colnames(pheno_data)<- c("geo_accession" , "source_name", "age",
+                         "hours_since_injury", "sex")
+pheno_data$ID<- "Case"
+pheno_data$ID[1:37]<-"Control"
+
+pheno_data$source_name<- gsub("Subject ", "", pheno_data$source_name)
+pheno_data$source_name<- gsub(",.+", "", pheno_data$source_name)
+pheno_data$source_name[1:37]<- paste(pheno_data$source_name[1:37], 1:37, sep="")
+
+pheno_data$age<- as.integer(pheno_data$age)
+pheno_data$hours_since_injury<- as.numeric(pheno_data$hours_since_injury)
+
+expr_data<-test
+
+rm(data, eset, m, test)
+
+```
+
+
+
+####Identification of a single gene differential expression: 
+The samples might be biased by the person they come from, as there are multiple measures per patient and hours since injury ^1^.
+<br>
+When there are many time points, it is reasonable to assume that expression changes smoothly over time rather than making
+discrete jumps from one time point to another ^2^.
+<br>
+Following this reasoning, a single linear regression may not be suitable, and a polynomial regression may overfit the values^3^. this is why it was decided to use the cubic spline "generalized aditive model" approach ^4,5^.
+<br>
+In terms of a linear predictor, the mathematical formula takes the following output:<br>
+<center> $$y = \sum x_{j}	\beta{j}  $$ </center>
+Where $y$ is a response to the outcome variable, $x$ is a prognostic factor and $\beta{j}$ are parameters.<br>
+The generalized aditive model replaces $\sum x_{j}	\beta{j}$ with $\sum f{j}(x{j})$ where $f{j}$ is a smooth curve that minimizes the function:<br>
+<center> $$\sum (y{i} - f(x{i}))^2 + \lambda \int f'' (x)^2 dx $$ </center><br>
+Notice here that $\lambda$ is a non negative smoothing parameter that has to be choosen between the tradeoff of the goodness of fit of the data ( $\sum (y{i} - f(x{i}))^2$ ) and the wiggleness of the function. Larger values of $\lambda$ force $f$ to be smoother.<br>
+The solution of this function is a cubic spline, a cubic polynomial with the pieces joined at unique observed $x$ in the dataset, named knots^14^.<br>
+
+The "ns" function of the package limma ^2^ creates a basis for the cubic spline regression that can be replaced for the variable hours_since_injury with the added separation between knots.<br>
+In order to choose the correct degrees of freedom (the value of $\lambda$), first I have to see if inside the knots, the same patient will be repeated at least twice, which will introduce a bias. Therefore I created a function that will output how many times a patient is repeated within the boundaries of an incresing amount of knots, using gene as an example. 
+Bearing in mind that I decided to put all the controls as time 0, with no unique source name, they will be counted as repeats; therefore the minimum outcome expected in this function is 1, the column name is $\lambda$ and the result is the total repeats per knot.<br>
+
+
+```{r,warning=FALSE, echo=FALSE,fig.height=6, fig.width=6, fig.cap="<b>Figure 1: Barplot of the total number of repeated samples inside knots for increasing amounts of degrees of freedom. </b>."}
+library(splines)
+library(ggplot2)
+
+pheno_data$hours_since_injury[1:37]<-0
+
+#topTable(fit)
+
+
+ver_test<-data.frame(geo_accession=names(expr_data["211275_s_at",]), expr_data["211275_s_at",])
+ver_test<-merge(ver_test, pheno_data[,c("geo_accession","source_name","hours_since_injury")], by= "geo_accession")
+
+
+
+repeats_frame2<- data.frame(df=0, knot=0, source_name=0)
+for (s in 5:75){
+
+X <- ns(ver_test$hours_since_injury, intercept=FALSE, df=s)
+
+
+repeats_frame<- data.frame(knot=0, source_name=0)
+for (i in 1:(length(attributes(X)$knots))){
+  if(i==1){
+    
+    m<-which(ver_test$hours_since_injury<attributes(X)$knots[i])
+    if (length(which(length(ver_test[m,"source_name"])>1))!=0){
+      if(length(which(duplicated(ver_test[m,"source_name"])))!=0){
+        
+        m2<- which(duplicated(ver_test[m,"source_name"]))
+        
+        
+       
+       repeats_frame<- rbind(repeats_frame,data.frame(knot=rep(i, length(m2) ), source_name=ver_test[m[m2], "source_name"]))
+        
+      }
+    }
+  }
+  
+  if(i==length(attributes(X)$knots)){
+    
+    
+     m<-which(ver_test$hours_since_injury>attributes(X)$knots[i])
+    if (length(which(length(ver_test[m,"source_name"])>1))!=0){
+      if(length(which(duplicated(ver_test[m,"source_name"])))!=0){
+        
+        m2<- which(duplicated(ver_test[m,"source_name"]))
+        
+        
+       
+       repeats_frame<- rbind(repeats_frame,data.frame(knot=rep(i, length(m2) ), source_name=ver_test[m[m2], "source_name"]))
+      }
+    }
+    
+  }else{
+    
+    m<-which(ver_test$hours_since_injury>attributes(X)$knots[i] & ver_test$hours_since_injury<attributes(X)$knots[i+1] )
+    
+    if (length(which(length(ver_test[m,"source_name"])>1))!=0){
+      if(length(which(duplicated(ver_test[m,"source_name"])))!=0){
+        
+        m2<- which(duplicated(ver_test[m,"source_name"]))
+        
+        
+        
+       repeats_frame<- rbind(repeats_frame,data.frame(knot=rep(i, length(m2) ), source_name=ver_test[m[m2], "source_name"]))
+        
+        
+      }
+      
+      
+      
+      }
+    
+    
+  }
+  
+  
+}
+
+
+repeats_frame<- repeats_frame[2:dim(repeats_frame)[1],]
+repeats_frame$df<- rep(s, dim(repeats_frame)[1])
+repeats_frame2<- rbind(repeats_frame2, repeats_frame)
+
+}
+
+ggplot(repeats_frame2, aes(df))+ geom_bar()+xlab("number of knots")+ylab("number of repeats")
+
+```
+<br>
+As it can be seen in Fig. 1, there is a great decrease in the number of repeats. When it reaches 38 there are 0 repeats. However, at late stage of this assay I found that there are empty knots that the lmFit function from limma package does not accept. Thus, the minimum degrees of freedom chosen was 16. <br>
+Next is to compare if the use of the knots in the ns function represents a better model than just using hours since injury.
+
+```{r, echo=FALSE}
+
+ver_test<-data.frame(geo_accession=names(expr_data["211275_s_at",]), expr_data["211275_s_at",])
+ver_test<-merge(ver_test, pheno_data[,c("geo_accession","source_name","hours_since_injury")], by= "geo_accession")
+
+colnames(ver_test)[2]<- "X211275_s_at"
+X <- ns(pheno_data$hours_since_injury, df=38)
+
+
+lm1 <- lm(X211275_s_at ~ hours_since_injury, data = ver_test)
+lm2 <- lm(X211275_s_at ~ X, data = ver_test)
+X <- ns(pheno_data$hours_since_injury, df=16)
+lm16<- lm(X211275_s_at ~ X, data = ver_test)
+
+#ver_test<- ver_test[38:dim(ver_test)[1],]
+#X <- ns(ver_test$hours_since_injury, df=16)
+#lm3<- lm(X211275_s_at ~ X, data = ver_test)
+
+anova(lm1,lm2)
+anova(lm2,lm16)
+
+
+```
+
+As it is shown by the anova result, the addition of the knots is significant between a single linear function and the addition of a cubic spline with 16 knots (first result). However, using 16 or 38 knots does not show a significative difference (second result). It increases the $R^2$ from 0.24 to 0.68 and excludes in each bin the individual differences between patients but for 16 of the 285 patients. When excluding the controls and performing the test on 16 degress of freedom the $R^2$ is 0.55 and the p-value is the same (Fig. 2(B)).
+
+```{r, warning=FALSE, echo=FALSE,fig.height=6,message=FALSE, fig.width=6, fig.cap="<b>Figure 2: Cubic spline fit of the gene GYG1.</b> The black line represents the fitted function. (A)16 degrees of freedom including the controls. (B) 16 degrees of freedom withouth the controls."}
+library(gridExtra)
+ver_test<-data.frame(geo_accession=names(expr_data["211275_s_at",]), expr_data["211275_s_at",])
+ver_test<-merge(ver_test, pheno_data[,c("geo_accession","source_name","hours_since_injury", "ID")], by= "geo_accession")
+colnames(ver_test)[2]<- "X211275_s_at"
+X <- ns(pheno_data$hours_since_injury, df=16)
+predicted_df <- data.frame(X211275_s_at = predict(lm16, ver_test), geo_accession=ver_test$geo_accession)
+ver2<-merge(ver_test,predicted_df, by= "geo_accession")
+
+t1<-ggplot(data = ver2, aes(x = hours_since_injury, y = X211275_s_at.x))+
+geom_point( aes(color=ID))+geom_line(inherit.aes= FALSE, aes(x=hours_since_injury, y=X211275_s_at.y), color="black")+theme(legend.position = "none")+ylab("Gene GYG1 expression")+xlab("Hours since injury")+ ggtitle("(A)")
+
+
+ver_test<-data.frame(geo_accession=names(expr_data["211275_s_at",]), expr_data["211275_s_at",])
+ver_test<-merge(ver_test, pheno_data[,c("geo_accession","source_name","hours_since_injury")], by= "geo_accession")
+colnames(ver_test)[2]<- "X211275_s_at"
+fit_data<-ver_test[1:37,]
+ver_test<- ver_test[38:dim(ver_test)[1],]
+X <- ns(ver_test$hours_since_injury, df=16)
+lm3<- lm(X211275_s_at ~ X, data = ver_test)
+predicted_df <- data.frame(X211275_s_at = predict(lm3, ver_test), geo_accession=ver_test$geo_accession)
+ver2<-merge(ver_test,predicted_df, by= "geo_accession")
+
+t2<-ggplot(data = ver2, aes(x = hours_since_injury, y = X211275_s_at.x))+
+geom_point( color="grey")+geom_line(inherit.aes= FALSE, aes(x=hours_since_injury, y=X211275_s_at.y), color="black")+theme(legend.position = "none")+ylab("Gene GYG1 expression")+xlab("Hours since injury")+ ggtitle("(B)")
+
+
+
+
+grid.arrange(t1,
+             t2,
+             nrow=2)
+```
+<br>
+When comparing the fitting from $\lambda = 16$ with and without controls (Fig. 2), the expression levels approximate those of the controls when the time passes by. Using the approximation function, using the fitted data from the black curve in Fig. 1 B, the mean time in where the expression of the gene GYG1 for the cases approximates the controls is 6959 hours with a standrd deviation of 2900 hours. If one was to fit the same function only in a linear model, the expected hours to return to the baseline would be 9035.
+
+```{r,echo=FALSE, waning=FALSE, eval=FALSE }
+library(chemCal)
+
+inverse.predict(lm1, fit_data$X211275_s_at)
+
+mean(approx(x=ver2$X211275_s_at.y, y=ver2$hours_since_injury, xout=fit_data$X211275_s_at)$y, na.rm=T)
+```
+
+### Finding the most differentially expressed genes in the dataset
+```{r,warning=FALSE, echo=FALSE,message=FALSE,fig.height=6, fig.width=6, fig.cap="<b>Figure 3: Gene expression as a function of time for the best 10 differentialy expressed genes.</b>"}
+library(limma)
+library(reshape2)
+
+X <- ns(pheno_data$hours_since_injury, df=16)
+
+#Group <- factor(pheno_data$ID)
+design <- model.matrix(~X)
+fit <- lmFit(expr_data, design)
+fit <- eBayes(fit)
+
+
+
+genes<- rownames(topTable(fit))
+
+ver<- data.frame(geo_accession=names(expr_data["211275_s_at",]), t(expr_data[genes,]) )
+ver<-merge(ver, pheno_data[,c("geo_accession","source_name","hours_since_injury", "ID")], by= "geo_accession")
+
+
+ver_f<- melt(ver, id.vars=c("geo_accession","source_name","hours_since_injury", "ID"))
+
+
+ggplot(data = ver_f, aes(x = hours_since_injury, y = value))+ 
+geom_point( aes(color=ID))+facet_wrap(~ variable)+xlab("Hours since injury")+ylab("Gene expression value")
+
+
+
+```
+<br>
+From the total 44692 genes, only 7887 were not differentially expressed (p-adj <0.05) or using a cutoff of p-adj of 0.01, 12284 . It tells the big impact of a severe burn in the body.<br> When selecting the $10^{-61}$ p-adj; the top 270 genes are selected.
+Using the package topGO ^7^, that relates the gene names to annotated categories in the GO object, the pathway of biological signalling corresponding to inflammation, signalling and inmmune response related to 28 adjusted top genes ends in neutrophil degranulation; which is a feature of inflammatory disorders ^8^.
+```{r,warning=FALSE, echo=FALSE,fig.height=8, fig.width=8, fig.cap="<b>Figure 4: Significantly enriched GO nodes in the GO hierarchy.</b> ",message=FALSE}
+table_CD <- topTable(fit, number = Inf)
+#length(which (table_CD$adj.P.Val>0.05))
+#length(which (table_CD$adj.P.Val>0.01))
+
+geneNames<-rownames(table_CD)
+
+#10 ^-61 = 270 genes
+myInterestingGenes<- geneNames[which (table_CD$adj.P.Val<0.0000000000000000000000000000000000000000000000000000000000001)]
+geneList <- factor(as.integer(geneNames %in% myInterestingGenes))
+names(geneList) <- geneNames
+
+#str(geneList)
+
+geneList<- setNames(table_CD$adj.P.Val, geneNames)
+topDiffGenes <- function(allScore) {return(allScore < 0.0000000000000000000000000000000000000000000000000000000000001) }
+
+
+library(topGO)
+library(hgu133plus2.db)
+
+GOdata <- new("topGOdata", description = "GO analysis of 10 to the 61 adj-p values", ontology = "BP", allGenes = geneList, geneSel = topDiffGenes, annot = annFUN.db, nodeSize = 5, affyLib = "hgu133plus2.db")
+
+
+
+resultFis <- runTest(GOdata, algorithm = "classic", statistic = "fisher")
+library(Rgraphviz)
+par(cex = 0.65)
+showSigOfNodes(GOdata, score(resultFis), firstSigNodes = 3,
+               useInfo = 'def')
+
+```
+### Pathway Enrichment Analysis
+Using the package called ReactomePA ^9^, it is possible to investigate the peer reviewed Reactome pathway database to visualize specific metabolic pathways associated to the burn injury results.<br>
+```{r,warning=FALSE, echo=FALSE,message=FALSE,fig.height=5, fig.width=5, fig.cap="<b>Figure 5: Enriched Reactome pathways and their p–values.</b>  Barplot of the different pathways."}
+
+
+library(ReactomePA)
+library(stringr)
+entrez_ids <- mapIds(hgu133plus2.db, 
+      keys = rownames(table_CD), 
+      keytype = "PROBEID",
+      column = "ENTREZID")
+
+myInterestingGenes<- geneNames[which (table_CD$adj.P.Val<0.00000000000000000000000000000001)]
+
+
+reactome_enrich <- enrichPathway(gene = entrez_ids[myInterestingGenes],
+                                organism = "human",
+                                pvalueCutoff = 0.05,
+                                qvalueCutoff = 0.2, 
+                                readable = FALSE)
+
+reactome_enrich@result$Description <- paste0(str_sub(reactome_enrich@result$Description, 1, 20),"...")
+
+
+barplot(reactome_enrich,  main="(A)")
+
+```
+<br><br>
+
+```{r, comment=NA,warning=FALSE, echo=FALSE,fig.height=5, fig.width=5, fig.cap="<b>Figure 6: Visualization of the  gene sets as a network.</b>"}
+emapplot(reactome_enrich, showCategory = 10,  main="(B)")
+
+```
+<br><br>
+
+####Discussion
+From the genetic expression on the Affymetrix U133 plus 2.0 GeneChip signal from 244 severe burned patients it was possible to study the passage of time and the genetic expression as a function of it.
+Because some patients were measured multiple times, individual expression of each patient would be a bias. In order to account for this, a model of multiple testing using cubic splines was used in the study of a single gene, the GYG1 (glycogenin, related to the glucose metabolism and innate immune system ^10^). It was selected because it was the most differentially expressed when using 5 degrees of freedom for the initial testing of the cubic splines.
+However, testing the amount of repeats in each knot of single patient measurements rapidly showed the need to increase the degrees of freedom for the basis of the cubic spline. The function used did not take in account the empty knots, what in the end gave errors trying to use the limma package with 38 degrees of freedom. The maximum number allowed was 16 degrees of freedom. Regardess of that, an analysis of variance of the two multivariate models (16 and 38 degress of freedom) did not show any statistical difference, so this value was picked for later studies. To pick most accurately the degrees of freedom it may be necessary to iterate over all the genes, and also to review cross validation error estimates ^6^. <br>
+About the time necesssary for the gene expression to return to the baseline; the approximation of the cubic spline function for the GYG1 gene to the value of the expression of the controls was around 7000 hours, which is around 9 months. Nevertheless, in Fig. 3 a quick visual inspection shows that this value is different for the top genes of the whole dataset regression with 16 degrees of freedom, for those the return to the baseline is observed around 4 months. I conclude that the time necessary for the genetic expression to return to the baseline depends on the type of gene. Possibly the genes related with inflamation as an acute response will be the most differentially expressed but also the ones that will return to the baseline faster, whereas the GYG1 gene releated to a more general metabolic pathway will take longer to return to its baseline. This results are not enough to give real conclusions, though.<br>
+With the results from the limma package analysis, using a p-adjusted cutoff of 0.01, 72% of the total genes in this study were affected by a major burn. This highlights the impact that a major burn does to the body.<br>
+The topGO package annotation was tracked to the U133 Affimetrix chip to generate a hierarchy of nodes, that starts with a general biological process and leads into a neutrophil degranulation pathway, using a $10^{-61}$ arbitraty cutoff because of a means of visualization. A p-value correction test using fisher statistics shows the results of the 28 variables that showed to be dependent to one another from the initial 270.<br>
+Finally, from an initial cutoff of $10^{-32}$, that is 2588 genes with the top p-adjusted values; an enrichment analysis was performed to identify pathway groups, using a hypergeometric model to asses wether the number of genes associated with a reactome pathway is larger than expected^11^. Four main groups result from this analysis, DAP12 , interleukin 4 , interferon gamma signaling and neutrophil degranulation. DAP12 is related in celular activation ^12^ expressed in receptors of immune cells ^13^. Interleukin 4 is a citokine that induces the differentiation of naive helper T cells into Th2 cells (adaptative immune system) and interferon gamma is a citokine related to the activation of the innate immune system. Finally, as discussed previously, the degranulation of neutrophils is related to kinase activators. The contents of such granules is higly enriched in tissue destructive proteases, so in some extent is related to burn injury.^8^<br>
+The results from topGO and Reactome both complement each other and validate the results.<br>
+With this study, it was possible to conclude that there is indeed regression of the expresion of the genes to a baseline depending on the type of genes involved and that burn injuries are related to the activation of innate and adaptive immune respones. Further statistical analysis need to be done and iterated over all the genes to validate the results.<br>
+<br>
+
+####References
+
+1. https://bioconductor.org/packages/devel/workflows/vignettes/maEndToEnd/inst/doc/MA-Workflow.html
+2. https://bioconductor.org/packages/3.11/bioc/vignettes/limma/inst/doc/usersguide.pdf 
+3. https://towardsdatascience.com/unraveling-spline-regression-in-r-937626bc3d96 
+
+4. https://projecteuclid.org/download/pdf_1/euclid.ss/1177013604
+
+5. http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.46.8665&rep=rep1&type=pdf
+
+6. https://www.andrew.cmu.edu/user/achoulde/95791/lectures/lecture02/lecture02-95791.pdf
+
+7. https://bioconductor.org/packages/3.11/bioc/html/topGO.html
+
+8. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2876182/
+9. https://bioconductor.org/packages/release/bioc/html/ReactomePA.html
+10. https://www.genecards.org/cgi-bin/carddisp.pl?gene=GYG1
+
+11. https://bioconductor.org/packages/devel/bioc/vignettes/ReactomePA/inst/doc/ReactomePA.html
+
+12. https://reactome.org/content/detail/R-HSA-
+13. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC151875/
+14. https://link.springer.com/article/10.1186/s12874-019-0666-3
+
